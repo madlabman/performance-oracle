@@ -1,0 +1,22 @@
+{
+    "compilerOptions": {
+        "target": "es2022",
+        "esModuleInterop": true,
+        "module": "nodenext",
+        "moduleResolution": "nodenext",
+        "rootDir": ".",
+        "outDir": "build",
+        "alwaysStrict": true,
+        "sourceMap": true,
+        "forceConsistentCasingInFileNames": true,
+        "noFallthroughCasesInSwitch": true,
+        "noImplicitReturns": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noImplicitAny": false,
+        "noImplicitThis": false,
+        "strictNullChecks": false,
+        "skipLibCheck": true
+    },
+    "include": ["src/**/*"]
+}
