@@ -6,6 +6,7 @@ import {
     PubkeyHex,
     ValidatorInfo,
 } from './types.js';
+import { debug } from './utils.js';
 
 export const indexToPubkey = new Map<ValidatorIndex, PubkeyHex>();
 
@@ -39,7 +40,10 @@ export function addValidatorToSlotDuty(
     duties.set(slot, duty);
 
     const pubkey = indexToPubkey.get(index);
-    const buf = stats.get(pubkey) || { assignedAttestations: 0, missedAttestations: 0 };
+    const buf = stats.get(pubkey) || {
+        assignedAttestations: 0,
+        missedAttestations: 0,
+    };
     buf.assignedAttestations++;
     buf.missedAttestations++;
     stats.set(pubkey, buf);
@@ -49,6 +53,7 @@ export function excludeFromStats(pred: (v: ValidatorInfo) => boolean) {
     for (const [index, p] of stats) {
         if (pred(p)) {
             stats.delete(index);
+            debug('Excluded NO from rewards', [index, p]);
         }
     }
 }
