@@ -146,7 +146,7 @@ async function checkEpochSlots(epoch: Epoch) {
     for (const slot of iterSlotsInEpoch(epoch)) {
         const atts = await getSlotAttestations(slot);
         atts.forEach((a) => {
-            const d = Cache.duties.get(slot);
+            const d = Cache.duties.get(a.data.slot);
             if (d) {
                 d.forEach((c, i) => {
                     if (a.aggregationBits.get(c.position)) {
