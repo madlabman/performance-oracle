@@ -10,7 +10,7 @@ import { catCID, uploadTree } from './ipfs.js';
 import { buildTree, loadTree } from './merkle.js';
 import { shared as Shared } from './shared.js';
 import { ValidatorInfo } from './types.js';
-import { debug, toHex } from './utils.js';
+import { debug, isUint64, toHex } from './utils.js';
 
 export async function main(): Promise<void> {
     // TODO: place somewhere else?
@@ -24,9 +24,7 @@ export async function main(): Promise<void> {
         return;
     }
 
-    const targetEpoch = await Shared.ORACLE.nextReportEpoch({
-        blockTag,
-    });
+    const targetEpoch = await nextReportEpoch(blockTag);
     debug('Target epoch is', targetEpoch);
 
     if (targetEpoch > slotToEpoch(clBlock.message.slot)) {
@@ -34,13 +32,10 @@ export async function main(): Promise<void> {
         return;
     }
 
-    // TODO: query report frame instead
-    const sourceEpoch = await Shared.ORACLE.lastConsolidatedEpoch({
-        blockTag,
-    });
-    debug('Source epoch is', sourceEpoch);
+    const [from, to] = await reportFrame(blockTag);
+    debug('Report frame in epochs is', [from, to]);
 
-    const artifact = readArtifact(Number(sourceEpoch), Number(targetEpoch));
+    const artifact = readArtifact(from, to);
     if (!R.isNil(artifact)) {
         debug('Report tree artifact already exists');
         return;
@@ -75,14 +70,12 @@ export async function main(): Promise<void> {
     await loadValidators(Number(targetEpoch));
 
     debug('Fetching duties');
-    // TODO: fix range
-    for (const epoch of R.range(Number(sourceEpoch), Number(targetEpoch))) {
+    for (const epoch of iterEpochs(from, to)) {
         await lookupCommittees(epoch);
     }
 
     debug('Check duties');
-    // TODO: fix range
-    for (const epoch of R.range(Number(sourceEpoch), Number(targetEpoch))) {
+    for (const epoch of iterEpochs(from, to)) {
         await checkEpochSlots(epoch);
     }
 
@@ -90,24 +83,27 @@ export async function main(): Promise<void> {
     Cache.excludeFromStats(belowThreshold(0.9));
 
     const feeShares = await Shared.STETH.sharesOf(Shared.CONFIG.CSM_ADDRESS);
-    const distributed = distributeFees(feeShares + 42n);
+    const distributed = distributeFees(feeShares);
 
     const leafs = R.sortBy(R.prop(0), [...Cache.rewards.entries()]);
     debug('Rewards distribution', leafs);
     const tree = buildTree(leafs);
     debug('Report tree root', tree.root);
-    saveArtifact(Number(sourceEpoch), Number(targetEpoch), tree);
 
-    // TODO: Simulate report sending
+    debug('Simulating the report');
     await Shared.ORACLE.connect(Shared.SIGNER).submitReport.staticCall(
         targetEpoch,
         tree.root,
         distributed,
         '', // CID TBA, but can be precalculated
     );
+    debug('Simulation successfull!');
 
+    debug('Uploading the tree to IPFS');
     const cid = await uploadTree(tree);
-    // TODO: send a report
+    debug('Tree uploaded, CID is', cid.toString());
+
+    debug('Sending the report');
     await Shared.ORACLE.connect(Shared.SIGNER).submitReport(
         targetEpoch,
         tree.root,
@@ -116,7 +112,33 @@ export async function main(): Promise<void> {
     );
 
     debug('Report sent, storing the artifact');
-    saveArtifact(Number(sourceEpoch), Number(targetEpoch), tree);
+    saveArtifact(from, to, tree);
+}
+
+async function nextReportEpoch(blockTag: BlockTag) {
+    const r = await Shared.ORACLE.nextReportEpoch({
+        blockTag,
+    });
+
+    if (!isUint64(r)) {
+        throw new Error('Next report epoch is too big');
+    }
+
+    return Number(r) as Epoch;
+}
+
+async function reportFrame(blockTag: BlockTag) {
+    const r = await Shared.ORACLE.reportFrame({
+        blockTag,
+    });
+
+    for (const n of r) {
+        if (!isUint64(n)) {
+            throw new Error(`Report frame slot ${n.toString()} is too big`);
+        }
+    }
+
+    return R.map(R.pipe(Number, slotToEpoch))(r) as [Epoch, Epoch];
 }
 
 async function loadValidators(epoch: Epoch) {
@@ -170,12 +192,21 @@ function* iterSlotsInEpoch(epoch: Epoch): Generator<Slot> {
     }
 }
 
+// Inclusive iterator over the epochs
+function* iterEpochs(start: Epoch, end: Epoch): Generator<Epoch> {
+    for (const epoch of R.range(start, end + 1)) {
+        yield epoch;
+    }
+}
+
 function belowThreshold(threshold: number) {
     return R.pipe(validatorPerf, R.lt(R.__, threshold));
 }
 
 function validatorPerf(v: ValidatorInfo) {
-    return (v.assignedAttestations - v.missedAttestations) / v.assignedAttestations;
+    return (
+        (v.assignedAttestations - v.missedAttestations) / v.assignedAttestations
+    );
 }
 
 async function getLastFinalizedBeaconBlock(): Promise<SignedBeaconBlock> {
