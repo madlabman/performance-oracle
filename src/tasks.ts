@@ -121,10 +121,8 @@ export async function main(): Promise<void> {
 
 async function loadValidators(epoch: Epoch) {
     const vals = await getModuleValidators(epochLastSlot(epoch));
+    debug('Found validators:', vals.length);
     for (const v of vals) {
-        if (v.validator.slashed) {
-            continue;
-        }
         Cache.indexToPubkey.set(v.index, toHex(v.validator.pubkey));
     }
 }
