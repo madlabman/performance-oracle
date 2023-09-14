@@ -151,8 +151,8 @@ async function loadValidators(epoch: Epoch) {
 
 async function lookupCommittees(epoch: Epoch) {
     debug('Looking up committees for epoch', epoch);
-    const epochCommitees = await getEpochCommmittees(epoch);
-    epochCommitees.map((committee) => {
+    const epochCommittees = await getEpochCommittees(epoch);
+    epochCommittees.map((committee) => {
         committee.validators.forEach((index, pos) => {
             if (Cache.isTrackedValidator(index)) {
                 Cache.addValidatorToSlotDuty(index, committee.slot, pos);
@@ -245,7 +245,7 @@ function getBlockTag(clBlock: SignedBeaconBlock): RootHex | number {
     return toHex(clBlock.message.body.eth1Data.blockHash);
 }
 
-async function getEpochCommmittees(epoch: number) {
+async function getEpochCommittees(epoch: number) {
     const r = await Shared.CL.beacon.getEpochCommittees(epochLastSlot(epoch), {
         epoch,
     });
