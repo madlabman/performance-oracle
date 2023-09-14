@@ -154,7 +154,7 @@ async function checkEpochSlots(epoch: Epoch) {
                             Cache.indexToPubkey.get(c.validatorIndex),
                         );
                         if (p) {
-                            p.missedSlots--;
+                            p.missedAttestations--;
                         }
                         delete d[i];
                     }
@@ -178,7 +178,7 @@ function belowThreshold(threshold: number) {
 }
 
 function validatorPerf(v: ValidatorInfo) {
-    return (v.assignedSlots - v.missedSlots) / v.assignedSlots;
+    return (v.assignedAttestations - v.missedAttestations) / v.assignedAttestations;
 }
 
 async function getLastFinalizedBeaconBlock(): Promise<SignedBeaconBlock> {
@@ -296,7 +296,7 @@ function distributeFees(totalShares: bigint) {
     const shareByPubkey = [] as Share[];
     Cache.stats.forEach((v, k) => {
         shareByPubkey.push({
-            share: BigInt(v.assignedSlots),
+            share: BigInt(v.assignedAttestations),
             pubkey: k,
         });
     });

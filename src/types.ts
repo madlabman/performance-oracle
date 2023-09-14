@@ -21,8 +21,8 @@ export type CommitteePosition = {
 };
 
 export type ValidatorInfo = {
-    assignedSlots: number;
-    missedSlots: number;
+    assignedAttestations: number;
+    missedAttestations: number;
 };
 
 export type NOIndex = number;
