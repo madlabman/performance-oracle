@@ -39,9 +39,9 @@ export function addValidatorToSlotDuty(
     duties.set(slot, duty);
 
     const pubkey = indexToPubkey.get(index);
-    const buf = stats.get(pubkey) || { assignedSlots: 0, missedSlots: 0 };
-    buf.assignedSlots++;
-    buf.missedSlots++;
+    const buf = stats.get(pubkey) || { assignedAttestations: 0, missedAttestations: 0 };
+    buf.assignedAttestations++;
+    buf.missedAttestations++;
     stats.set(pubkey, buf);
 }
 
