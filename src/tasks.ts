@@ -146,7 +146,7 @@ async function checkEpochSlots(epoch: Epoch) {
         atts.forEach((a) => {
             const d = Cache.duties.get(a.data.slot);
             if (d) {
-                d.forEach((c, i) => {
+                d.forEach((c) => {
                     if (a.aggregationBits.get(c.position)) {
                         const p = Cache.stats.get(
                             Cache.indexToPubkey.get(c.validatorIndex),
@@ -154,7 +154,6 @@ async function checkEpochSlots(epoch: Epoch) {
                         if (p) {
                             p.missedAttestations--;
                         }
-                        delete d[i];
                     }
                 });
             }
