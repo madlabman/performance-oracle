@@ -1,6 +1,6 @@
 import { PubkeyHex } from '@lodestar/api/keymanager';
 import { Epoch, RootHex, Slot } from '@lodestar/types';
-import { SignedBeaconBlock } from '@lodestar/types/allForks';
+import { SignedBeaconBlock } from '@lodestar/types/bellatrix';
 import { BlockTag } from 'ethers';
 import * as R from 'ramda';
 
@@ -67,7 +67,7 @@ export async function main(): Promise<void> {
     }
 
     debug('Loading validators');
-    await loadValidators(Number(targetEpoch));
+    await loadValidators(targetEpoch);
 
     debug('Fetching duties');
     for (const epoch of iterEpochs(from, to)) {
@@ -82,8 +82,14 @@ export async function main(): Promise<void> {
     // TODO: read the threshold from somewhere
     Cache.excludeFromStats(belowThreshold(0.9));
 
-    const feeShares = await Shared.STETH.sharesOf(Shared.CONFIG.CSM_ADDRESS);
+    const feeShares = await Shared.STETH.sharesOf(Shared.CONFIG.CSM_ADDRESS, {
+        blockTag, // FIXME: use blockTag of the closest AO report, maybe?
+    });
     const distributed = distributeFees(feeShares);
+    if (distributed === 0n) {
+        debug('No fees to distribute');
+        return;
+    }
 
     const leafs = R.sortBy(R.prop(0), [...Cache.rewards.entries()]);
     debug('Rewards distribution', leafs);
@@ -242,7 +248,7 @@ async function isReportable(blockTag: BlockTag): Promise<boolean> {
 }
 
 function getBlockTag(clBlock: SignedBeaconBlock): RootHex | number {
-    return toHex(clBlock.message.body.eth1Data.blockHash);
+    return toHex(clBlock.message.body.executionPayload.blockHash);
 }
 
 async function getEpochCommittees(epoch: number) {
@@ -318,7 +324,7 @@ async function loadCSMpubkeys(_: Slot) {
     return Array.from(Cache.pubkeyToNO.keys());
 }
 
-function distributeFees(totalShares: bigint) {
+function distributeFees(totalShares: bigint): bigint {
     type Share = { pubkey: PubkeyHex; share: bigint };
 
     const shareByPubkey = [] as Share[];
@@ -343,6 +349,10 @@ function distributeFees(totalShares: bigint) {
     );
 
     const sumOfShares = R.reduce(add, 0n, R.values(shareByNO));
+    if (sumOfShares === 0n) {
+        return 0n;
+    }
+
     let distributed = 0n;
 
     for (const [no, share] of R.toPairs(shareByNO)) {

@@ -14,7 +14,6 @@ class Shared {
 
     get EL() {
         return this.singleton(
-            // @ts-ignore
             R.partial(getElProvider, [this.CONFIG]),
             Symbol.for('EL'),
         );
@@ -22,7 +21,6 @@ class Shared {
 
     get CL() {
         return this.singleton(
-            // @ts-ignore
             R.partial(getClProvider, [this.CONFIG]),
             Symbol.for('CL'),
         );
@@ -30,7 +28,6 @@ class Shared {
 
     get IPFS() {
         return this.singleton(
-            // @ts-ignore
             R.partial(getIpfsClient, [this.CONFIG]),
             Symbol.for('IPFS'),
         );
@@ -63,7 +60,7 @@ class Shared {
         return this.singleton(connectStETH, Symbol.for('STETH'));
     }
 
-    singleton<T>(f: () => T, s: symbol): T {
+    singleton<T>(f: (...args: unknown[]) => T, s: symbol): T {
         if (R.isNil(globalThis[s])) {
             globalThis[s] = f();
         }
