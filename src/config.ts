@@ -1,9 +1,10 @@
 import * as R from 'ramda';
+import { config as dotenv } from 'dotenv';
 
 import { Config } from './types.js';
 
 export function getConfig(): Config {
-    return getConfigFromEnv() as any as Config;
+    return getConfigFromEnv();
 }
 
 export function isDebug(): boolean {
@@ -11,12 +12,15 @@ export function isDebug(): boolean {
 }
 
 function getConfigFromEnv(): Config {
+    dotenv();
+
     R.forEach(assertEnvIsSet, [
         'EL_URI',
         'CL_URI',
         'CSM_ADDRESS',
         'STETH_ADDRESS',
         'ORACLE_ADDRESS',
+        'CONSENSUS_ADDRESS',
         'PINATA_API_KEY',
         'PINATA_SECRET_API_KEY',
         'SIGNER_KEY',
@@ -29,10 +33,12 @@ function getConfigFromEnv(): Config {
         CSM_ADDRESS: process.env.CSM_ADDRESS,
         STETH_ADDRESS: process.env.STETH_ADDRESS,
         ORACLE_ADDRESS: process.env.ORACLE_ADDRESS,
+        CONSENSUS_ADDRESS: process.env.CONSENSUS_ADDRESS,
         PINATA_API_KEY: process.env.PINATA_API_KEY,
         PINATA_SECRET_API_KEY: process.env.PINATA_SECRET_API_KEY,
         SIGNER_KEY: process.env.SIGNER_KEY,
         ARTIFACTS_DIR: R.defaultTo('artifacts', process.env.ARTIFACTS_DIR),
+        MAX_CONCURRENCY: R.defaultTo(10, Number(process.env.MAX_CONCURRENCY)),
         DEBUG: isDebug(),
     };
 }

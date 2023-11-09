@@ -3,11 +3,17 @@
 #### Install dependencies
 
 ```bash
-bun install
+yarn install
+```
+
+#### Prepare environment variables
+
+```bash
+cp .env.sample .env
 ```
 
 #### Run
 
 ```bash
-bun run src/main.ts
+yarn start
 ```

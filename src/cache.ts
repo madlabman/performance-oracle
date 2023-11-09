@@ -2,7 +2,7 @@ import { Slot, ValidatorIndex } from '@lodestar/types';
 
 import {
     CommitteePosition,
-    NOIndex,
+    NodeOperatodID,
     PubkeyHex,
     ValidatorInfo,
 } from './types.js';
@@ -10,13 +10,13 @@ import { debug } from './utils.js';
 
 export const indexToPubkey = new Map<ValidatorIndex, PubkeyHex>();
 
-export const pubkeyToNO = new Map<PubkeyHex, NOIndex>();
+export const pubkeyToNO = new Map<PubkeyHex, NodeOperatodID>();
 
 export const duties = new Map<Slot, CommitteePosition[]>();
 
 export const stats = new Map<PubkeyHex, ValidatorInfo>();
 
-export const rewards = new Map<NOIndex, bigint>();
+export const rewards = new Map<NodeOperatodID, bigint>();
 
 export function destroy() {
     indexToPubkey.clear();
@@ -58,7 +58,7 @@ export function excludeFromStats(pred: (v: ValidatorInfo) => boolean) {
     }
 }
 
-export function addReward(index: NOIndex, reward: bigint): void {
+export function addReward(index: NodeOperatodID, reward: bigint): void {
     const buf = rewards.get(index) || BigInt(0);
     rewards.set(index, buf + reward);
 }

@@ -5,9 +5,16 @@ import { getProvider as getClProvider } from './cl-provider.js';
 import { getConfig } from './config.js';
 import { getProvider as getElProvider } from './el-provider.js';
 import { getIpfsClient } from './ipfs-provider.js';
-import { Oracle, Oracle__factory, StETH__factory } from './typechain/index.js';
+import {
+    HashConsensus__factory,
+    Oracle__factory,
+    StETH__factory,
+} from './typechain/index.js';
 
 class Shared {
+    CONSENSUS_VERSION = 1;
+    CONTRACT_VERSION = 1;
+
     get CONFIG() {
         return this.singleton(getConfig, Symbol.for('CONFIG'));
     }
@@ -41,23 +48,28 @@ class Shared {
     }
 
     get ORACLE() {
-        const self = this;
+        return this.singleton(
+            () => Oracle__factory.connect(this.CONFIG.ORACLE_ADDRESS, this.EL),
+            Symbol.for('ORACLE'),
+        );
+    }
 
-        function connectOracle(): Oracle {
-            return Oracle__factory.connect(self.CONFIG.ORACLE_ADDRESS, self.EL);
-        }
-
-        return this.singleton(connectOracle, Symbol.for('ORACLE'));
+    get HASHCONSENSUS() {
+        return this.singleton(
+            () =>
+                HashConsensus__factory.connect(
+                    this.CONFIG.CONSENSUS_ADDRESS,
+                    this.EL,
+                ),
+            Symbol.for('HASHCONSENSUS'),
+        );
     }
 
     get STETH() {
-        const self = this;
-
-        function connectStETH() {
-            return StETH__factory.connect(self.CONFIG.STETH_ADDRESS, self.EL);
-        }
-
-        return this.singleton(connectStETH, Symbol.for('STETH'));
+        return this.singleton(
+            () => StETH__factory.connect(this.CONFIG.STETH_ADDRESS, this.EL),
+            Symbol.for('STETH'),
+        );
     }
 
     singleton<T>(f: (...args: unknown[]) => T, s: symbol): T {
