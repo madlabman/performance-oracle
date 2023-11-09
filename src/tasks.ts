@@ -1,42 +1,54 @@
 import { PubkeyHex } from '@lodestar/api/keymanager';
 import { Epoch, RootHex, Slot } from '@lodestar/types';
 import { SignedBeaconBlock } from '@lodestar/types/bellatrix';
-import { BlockTag } from 'ethers';
+import { AbiCoder, BlockTag, ZeroHash, keccak256 } from 'ethers';
+import pLimit from 'p-limit';
 import * as R from 'ramda';
 
-import { readArtifact, saveArtifact } from './artifacts.js';
+import { artifactExists, fromString, saveArtifact } from './artifacts.js';
 import * as Cache from './cache.js';
-import { catCID, uploadTree } from './ipfs.js';
-import { buildTree, loadTree } from './merkle.js';
+import { catCID, uploadFile } from './ipfs.js';
+import { buildTree } from './merkle.js';
 import { shared as Shared } from './shared.js';
-import { ValidatorInfo } from './types.js';
+import { CSFeeOracle } from './typechain/Oracle.js';
+import { Artifact, ValidatorInfo } from './types.js';
 import { debug, isUint64, toHex } from './utils.js';
 
 export async function main(): Promise<void> {
+    const limit = pLimit(Shared.CONFIG.MAX_CONCURRENCY); // number of parallel tasks
+
     // TODO: place somewhere else?
     Cache.destroy();
 
     const clBlock = await getLastFinalizedBeaconBlock();
-    const blockTag = getBlockTag(clBlock);
+    let blockTag = getBlockTag(clBlock);
+    blockTag = 'latest';
 
-    if (!(await isReportable(blockTag))) {
+    if (!(await isReportable())) {
         debug('Report is not allowed');
         return;
     }
 
-    const targetEpoch = await nextReportEpoch(blockTag);
-    debug('Target epoch is', targetEpoch);
+    const refSlot = await nextReportRefSlot(blockTag);
+    debug('refSlot is', refSlot);
 
-    if (targetEpoch > slotToEpoch(clBlock.message.slot)) {
-        debug('Target epoch is not reached yet');
+    if (refSlot > clBlock.message.slot) {
+        debug('Target refSlot is not reached yet');
         return;
     }
 
-    const [from, to] = await reportFrame(blockTag);
-    debug('Report frame in epochs is', [from, to]);
+    const prevRefSlot = await prevReportRefSlot(blockTag);
+    if (prevRefSlot == refSlot) {
+        debug('Processing is already done');
+        return;
+    }
 
-    const artifact = readArtifact(from, to);
-    if (!R.isNil(artifact)) {
+    // reference slots are the last slots of the corresponding epochs
+    const sourceEpoch = slotToEpoch(prevRefSlot) + 1;
+    const targetEpoch = slotToEpoch(refSlot);
+    debug('Report frame in epochs is', [sourceEpoch, targetEpoch]);
+
+    if (artifactExists(sourceEpoch, targetEpoch)) {
         debug('Report tree artifact already exists');
         return;
     }
@@ -47,12 +59,14 @@ export async function main(): Promise<void> {
 
     if (R.isEmpty(prevTreeCID)) {
         debug('No previous report tree CID found');
+        // TODO: rebuild the tree from the scratch
     } else {
         debug('Reading the previous tree from IPFS by CID', prevTreeCID);
-        const prevTree = loadTree(await catCID(prevTreeCID));
+        const artifact = fromString(await catCID(prevTreeCID));
+        const prevTree = artifact.tree;
 
         debug('Check the tree root');
-        const prevRoot = await Shared.ORACLE.reportRoot({
+        const prevRoot = await Shared.ORACLE.treeRoot({
             blockTag,
         });
 
@@ -67,17 +81,21 @@ export async function main(): Promise<void> {
     }
 
     debug('Loading validators');
-    await loadValidators(targetEpoch);
+    await loadValidators();
 
     debug('Fetching duties');
-    for (const epoch of iterEpochs(from, to)) {
-        await lookupCommittees(epoch);
-    }
+    await Promise.all(
+        Array.from(iterEpochs(sourceEpoch, targetEpoch)).map((epoch) =>
+            limit(() => lookupCommittees(epoch)),
+        ),
+    );
 
     debug('Check duties');
-    for (const epoch of iterEpochs(from, to)) {
-        await checkEpochSlots(epoch);
-    }
+    await Promise.all(
+        Array.from(iterEpochs(sourceEpoch, targetEpoch)).map((epoch) =>
+            limit(() => checkEpochSlots(epoch)),
+        ),
+    );
 
     // TODO: read the threshold from somewhere
     Cache.excludeFromStats(belowThreshold(0.9));
@@ -96,59 +114,120 @@ export async function main(): Promise<void> {
     const tree = buildTree(leafs);
     debug('Report tree root', tree.root);
 
-    debug('Simulating the report');
-    await Shared.ORACLE.connect(Shared.SIGNER).submitReport.staticCall(
-        targetEpoch,
-        tree.root,
+    debug('Saving the artifact');
+    const artifact: Artifact = {
         distributed,
-        '', // CID TBA, but can be precalculated
+        sourceEpoch,
+        targetEpoch,
+        tree,
+    };
+    const filename = saveArtifact(artifact);
+    debug(`Artifact saved to ${filename}`);
+
+    // Uploading the tree optimistically
+    debug('Uploading the artifact to IPFS');
+    const cid = await uploadFile(filename);
+    debug('Tree uploaded, CID is', cid.IpfsHash);
+
+    const report = {
+        consensusVersion: Shared.CONSENSUS_VERSION,
+        refSlot: refSlot,
+        treeRoot: tree.root,
+        treeCid: cid.IpfsHash,
+        distributed: distributed,
+    };
+    const reportHash = hashReport(report);
+
+    const { currentFrameMemberReport } =
+        await Shared.HASHCONSENSUS.getConsensusStateForMember(
+            Shared.SIGNER.address,
+        );
+    if (currentFrameMemberReport == reportHash) {
+        debug('Provided hash already submitted');
+        return;
+    }
+
+    debug('Simulating sending report hash');
+    await Shared.HASHCONSENSUS.connect(Shared.SIGNER).submitReport.staticCall(
+        refSlot,
+        reportHash,
+        Shared.CONSENSUS_VERSION,
     );
     debug('Simulation successfull!');
 
-    debug('Uploading the tree to IPFS');
-    const cid = await uploadTree(tree);
-    debug('Tree uploaded, CID is', cid.toString());
-
     debug('Sending the report');
-    await Shared.ORACLE.connect(Shared.SIGNER).submitReport(
-        targetEpoch,
-        tree.root,
-        distributed,
-        cid.toString(),
+    await Shared.HASHCONSENSUS.connect(Shared.SIGNER).submitReport(
+        refSlot,
+        reportHash,
+        Shared.CONSENSUS_VERSION,
     );
-
     debug('Report sent, storing the artifact');
-    saveArtifact(from, to, tree);
+
+    const { currentFrameConsensusReport } =
+        await Shared.HASHCONSENSUS.getConsensusStateForMember(
+            Shared.SIGNER.address,
+        );
+
+    if (currentFrameConsensusReport == ZeroHash) {
+        debug('No consensus reached');
+        return;
+    }
+
+    if (currentFrameConsensusReport != reportHash) {
+        debug('Oracle`s hash differs from consensus report hash. Exiting');
+        return;
+    }
+
+    // TODO: check for fast lane
+    const treeRoot = await Shared.ORACLE.treeRoot();
+    if (treeRoot == tree.root) {
+        debug('Report already settled');
+        return;
+    }
+
+    debug('Settling the report');
+    debug('Simulating sending report data');
+    await Shared.ORACLE.connect(Shared.SIGNER).submitReportData.staticCall(
+        report,
+        Shared.CONTRACT_VERSION,
+    );
+    debug('Simulation successfull!');
+
+    debug('Sending report data');
+    await Shared.ORACLE.connect(Shared.SIGNER).submitReportData(
+        report,
+        Shared.CONTRACT_VERSION,
+    );
+    debug('Report data sent!');
+    debug('Done');
 }
 
-async function nextReportEpoch(blockTag: BlockTag) {
-    const r = await Shared.ORACLE.nextReportEpoch({
+async function nextReportRefSlot(blockTag: BlockTag): Promise<Slot> {
+    const { refSlot } = await Shared.HASHCONSENSUS.getCurrentFrame({
         blockTag,
     });
 
-    if (!isUint64(r)) {
-        throw new Error('Next report epoch is too big');
+    if (!isUint64(refSlot)) {
+        throw new Error('Next report refSlot is too big');
     }
 
-    return Number(r) as Epoch;
+    return Number(refSlot) as Slot;
 }
 
-async function reportFrame(blockTag: BlockTag) {
-    const r = await Shared.ORACLE.reportFrame({
+async function prevReportRefSlot(blockTag: BlockTag): Promise<Slot> {
+    const refSlot = await Shared.ORACLE.getLastProcessingRefSlot({
         blockTag,
     });
 
-    for (const n of r) {
-        if (!isUint64(n)) {
-            throw new Error(`Report frame slot ${n.toString()} is too big`);
-        }
+    if (!isUint64(refSlot)) {
+        throw new Error('Prev report refSlot is too big');
     }
 
-    return R.map(R.pipe(Number, slotToEpoch))(r) as [Epoch, Epoch];
+    return Number(refSlot) as Slot;
 }
 
-async function loadValidators(epoch: Epoch) {
-    const vals = await getModuleValidators(epochLastSlot(epoch));
+async function loadValidators() {
+    const vals = await getModuleValidators();
     debug('Found validators:', vals.length);
     for (const v of vals) {
         Cache.indexToPubkey.set(v.index, toHex(v.validator.pubkey));
@@ -230,7 +309,8 @@ async function getLastFinalizedBeaconBlock(): Promise<SignedBeaconBlock> {
 async function getSlotAttestations(slot: Slot) {
     const r = await Shared.CL.beacon.getBlockAttestations(slot);
     if (!r.ok) {
-        if (R.includes('NOT_FOUND: beacon block at slot', r.error?.message)) {
+        // TODO: double-check that it works for all clients
+        if (r.status == 404) {
             return [];
         }
         throw new Error(r.error?.message);
@@ -238,8 +318,8 @@ async function getSlotAttestations(slot: Slot) {
     return r.response.data;
 }
 
-async function isReportable(blockTag: BlockTag): Promise<boolean> {
-    const isPaused = await Shared.ORACLE.paused({ blockTag });
+async function isReportable(): Promise<boolean> {
+    const isPaused = await Shared.ORACLE.isPaused();
     if (isPaused) {
         return false;
     }
@@ -252,13 +332,10 @@ function getBlockTag(clBlock: SignedBeaconBlock): RootHex | number {
 }
 
 async function getEpochCommittees(epoch: number) {
-    const r = await Shared.CL.beacon.getEpochCommittees(epochLastSlot(epoch), {
+    const r = await Shared.CL.beacon.getEpochCommittees('finalized', {
         epoch,
     });
     if (!r.ok) {
-        if (R.includes('NOT_FOUND: beacon block at slot', r.error?.message)) {
-            return [];
-        }
         throw new Error(r.error?.message);
     }
     return r.response.data;
@@ -268,17 +345,13 @@ function epochStartSlot(epoch: Epoch): Slot {
     return epoch * 32;
 }
 
-function epochLastSlot(epoch: Epoch): Slot {
-    return epoch * 32 + 31;
-}
-
 function slotToEpoch(slot: Slot): Epoch {
     return Math.floor(slot / 32);
 }
 
-async function getModuleValidators(slot: Slot) {
-    const keys = await loadCSMpubkeys(slot);
-    const r = await Shared.CL.beacon.getStateValidators(slot, {
+async function getModuleValidators() {
+    const keys = await loadCSMpubkeys();
+    const r = await Shared.CL.beacon.getStateValidators('finalized', {
         // TODO: it's required to bacth keys probably
         id: keys,
     });
@@ -290,7 +363,7 @@ async function getModuleValidators(slot: Slot) {
 }
 
 // TODO: actual implementation for the method
-async function loadCSMpubkeys(_: Slot) {
+async function loadCSMpubkeys() {
     // Expect iterator of pubkeys by NO
     const iter = new Map([
         [
@@ -348,7 +421,7 @@ function distributeFees(totalShares: bigint): bigint {
         shareByPubkey,
     );
 
-    const sumOfShares = R.reduce(add, 0n, R.values(shareByNO));
+    const sumOfShares = R.reduce(addBn, 0n, R.values(shareByNO));
     if (sumOfShares === 0n) {
         return 0n;
     }
@@ -364,6 +437,15 @@ function distributeFees(totalShares: bigint): bigint {
     return distributed;
 }
 
-function add(a: any, b: any) {
+function hashReport(s: CSFeeOracle.ReportDataStruct) {
+    return keccak256(
+        AbiCoder.defaultAbiCoder().encode(
+            ['tuple(uint256,uint256,bytes32,string,uint256)'],
+            [R.values(s)],
+        ),
+    );
+}
+
+function addBn(a: bigint, b: bigint) {
     return a + b;
 }

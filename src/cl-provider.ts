@@ -11,6 +11,7 @@ export function getProvider(c: Config) {
             timeoutMs: c.CL_TIMEOUT,
         },
         {
+            // TODO: probably shoulde pluggable denepending on the chain
             config: etherConfig,
         },
     );
