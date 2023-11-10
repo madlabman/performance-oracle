@@ -21,23 +21,25 @@ export async function main(): Promise<void> {
     Cache.destroy();
 
     const clBlock = await getLastFinalizedBeaconBlock();
-    let blockTag = getBlockTag(clBlock);
-    blockTag = 'latest';
+    const blockTag = getBlockTag(clBlock);
+    debug('EL block tag is', blockTag);
 
     if (!(await isReportable())) {
         debug('Report is not allowed');
         return;
     }
 
-    const refSlot = await nextReportRefSlot(blockTag);
+    const refSlot = await currReportRefSlot(blockTag);
     debug('refSlot is', refSlot);
 
     if (refSlot > clBlock.message.slot) {
-        debug('Target refSlot is not reached yet');
+        debug('Next report reference slot is not reached yet');
         return;
     }
 
     const prevRefSlot = await prevReportRefSlot(blockTag);
+    debug('prevRefSlot is', prevRefSlot);
+
     if (prevRefSlot == refSlot) {
         debug('Processing is already done');
         return;
@@ -48,7 +50,7 @@ export async function main(): Promise<void> {
     const targetEpoch = slotToEpoch(refSlot);
     debug('Report frame in epochs is', [sourceEpoch, targetEpoch]);
 
-    if (artifactExists(sourceEpoch, targetEpoch)) {
+    if (await artifactExists(sourceEpoch, targetEpoch)) {
         debug('Report tree artifact already exists');
         return;
     }
@@ -121,7 +123,7 @@ export async function main(): Promise<void> {
         targetEpoch,
         tree,
     };
-    const filename = saveArtifact(artifact);
+    const filename = await saveArtifact(artifact);
     debug(`Artifact saved to ${filename}`);
 
     // Uploading the tree optimistically
@@ -139,7 +141,7 @@ export async function main(): Promise<void> {
     const reportHash = hashReport(report);
 
     const { currentFrameMemberReport } =
-        await Shared.HASHCONSENSUS.getConsensusStateForMember(
+        await Shared.CONSENSUS.getConsensusStateForMember(
             Shared.SIGNER.address,
         );
     if (currentFrameMemberReport == reportHash) {
@@ -148,7 +150,7 @@ export async function main(): Promise<void> {
     }
 
     debug('Simulating sending report hash');
-    await Shared.HASHCONSENSUS.connect(Shared.SIGNER).submitReport.staticCall(
+    await Shared.CONSENSUS.connect(Shared.SIGNER).submitReport.staticCall(
         refSlot,
         reportHash,
         Shared.CONSENSUS_VERSION,
@@ -156,7 +158,7 @@ export async function main(): Promise<void> {
     debug('Simulation successfull!');
 
     debug('Sending the report');
-    await Shared.HASHCONSENSUS.connect(Shared.SIGNER).submitReport(
+    await Shared.CONSENSUS.connect(Shared.SIGNER).submitReport(
         refSlot,
         reportHash,
         Shared.CONSENSUS_VERSION,
@@ -164,7 +166,7 @@ export async function main(): Promise<void> {
     debug('Report sent, storing the artifact');
 
     const { currentFrameConsensusReport } =
-        await Shared.HASHCONSENSUS.getConsensusStateForMember(
+        await Shared.CONSENSUS.getConsensusStateForMember(
             Shared.SIGNER.address,
         );
 
@@ -202,8 +204,8 @@ export async function main(): Promise<void> {
     debug('Done');
 }
 
-async function nextReportRefSlot(blockTag: BlockTag): Promise<Slot> {
-    const { refSlot } = await Shared.HASHCONSENSUS.getCurrentFrame({
+async function currReportRefSlot(blockTag: BlockTag): Promise<Slot> {
+    const { refSlot } = await Shared.CONSENSUS.getCurrentFrame({
         blockTag,
     });
 
