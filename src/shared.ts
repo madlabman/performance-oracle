@@ -54,7 +54,7 @@ class Shared {
         );
     }
 
-    get HASHCONSENSUS() {
+    get CONSENSUS() {
         return this.singleton(
             () =>
                 HashConsensus__factory.connect(

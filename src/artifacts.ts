@@ -1,4 +1,4 @@
-import fs from 'fs';
+import fs from 'fs/promises';
 import path from 'path';
 
 import { Epoch } from '@lodestar/types';
@@ -12,20 +12,36 @@ export function fromString(s: string): Artifact {
     return parse(s) as Artifact;
 }
 
-export function saveArtifact(a: Artifact): string {
-    if (!fs.existsSync(Shared.CONFIG.ARTIFACTS_DIR)) {
-        fs.mkdirSync(Shared.CONFIG.ARTIFACTS_DIR, { recursive: true });
+export async function saveArtifact(a: Artifact): Promise<string> {
+    try {
+        await fs.access(Shared.CONFIG.ARTIFACTS_DIR);
+    } catch (e) {
+        if (e.code !== 'ENOENT') {
+            throw e;
+        }
+
+        await fs.mkdir(Shared.CONFIG.ARTIFACTS_DIR, { recursive: true });
     }
     const filename = getFilename(a.sourceEpoch, a.targetEpoch);
-    fs.writeFileSync(filename, toString(a), 'utf8');
+    await fs.writeFile(filename, toString(a), 'utf8');
     return filename;
 }
 
-export function artifactExists(
+export async function artifactExists(
     sourceEpoch: Epoch,
     targetEpoch: Epoch,
-): boolean {
-    return fs.existsSync(getFilename(sourceEpoch, targetEpoch));
+): Promise<boolean> {
+    try {
+        await fs.access(getFilename(sourceEpoch, targetEpoch));
+    } catch (e) {
+        if (e.code !== 'ENOENT') {
+            throw e;
+        }
+
+        return false;
+    }
+
+    return true;
 }
 
 function getFilename(sourceEpoch: Epoch, targetEpoch: Epoch): string {
